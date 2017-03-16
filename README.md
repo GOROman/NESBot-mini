@@ -1,1 +1,2 @@
 # NESBot-mini
+NESBot mini
