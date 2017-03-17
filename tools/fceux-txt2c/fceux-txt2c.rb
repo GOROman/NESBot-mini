@@ -11,8 +11,8 @@ PAD_SELECT = (1<<2)
 PAD_B      = (1<<1)
 PAD_A      = (1<<0)
 
-PAD_SELECT2 = (PAD_UP|PAD_DOWN)
-PAD_RLEFLAG = (1<<2)
+#PAD_SELECT2 = (PAD_UP|PAD_DOWN)
+#PAD_RLEFLAG = (1<<2)
 
 def usage()
 	STDERR.print "Usage: ruby #{$0} [INPUT FILE(.txt)] [OUTPUT FILE(.h)]\n"
@@ -42,13 +42,13 @@ def rle( input )
 		pad = dat[i];	i += 1
 
 		# セレクトボタンのビットをRLE用に
-		if ( pad & PAD_SELECT ) == PAD_SELECT
-			pad &= ~PAD_SELECT
-			pad |= PAD_SELECT2
-		end
+#		if ( pad & PAD_SELECT ) == PAD_SELECT
+#			pad &= ~PAD_SELECT
+#			pad |= PAD_SELECT2
+#		end
 
 		count = 0
-		while( count < MAX_RLE_LENGTH ) do
+		while( count < MAX_RLE_LENGTH-1 ) do
 			next_pad = dat[i];	i += 1
 			count += 1
 
@@ -57,12 +57,12 @@ def rle( input )
 
 		i -= 1
 
-		if count == 1
+#		if count == 1
+#			buf << [pad].pack("C")
+#		else
 			buf << [pad].pack("C")
-		else
-			buf << [pad | PAD_RLEFLAG].pack("C")
 			buf << [count].pack("C")
-		end
+#		end
 	end
 
 	
@@ -83,10 +83,10 @@ def rld( input )
 		pad   = dat[i];		i += 1
 		count = 1
 
-		if ( pad & PAD_RLEFLAG ) == PAD_RLEFLAG
-			pad  &= ~PAD_RLEFLAG
+#		if ( pad & PAD_RLEFLAG ) == PAD_RLEFLAG
+#			pad  &= ~PAD_RLEFLAG
 			count = dat[i];		i += 1
-		end
+#		end
 
 		count.times { buf += [pad].pack("C") }
 	end
@@ -115,7 +115,11 @@ def convert( inputfile, outputfile )
 	i     = 0
 	n.each_byte { |c|
 	    i += 1
-		w.printf "0x%02x,", c
+	    if i % 2 == 1 
+			w.printf "0x%02x,", c
+	   	else
+			w.printf "%3d,", c
+		end
 
 	    w.printf " // %d\n", i if ( i % 16 == 0 )
 	}
