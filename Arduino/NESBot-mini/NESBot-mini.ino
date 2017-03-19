@@ -28,10 +28,15 @@
 #define PIN_GND        // GND   4021  8
 #define PIN_LATCH  2   // P/S   4021  9
 #define PIN_LED   13   // LED
+#define PIN_CLK    2
+#define PIN_OUT   32
 
 #define INT0      PIN_LATCH
 #define INT1      PIN_NMI
+#define INT2      PIN_CLK
 #endif
+
+int bit = 0;
 
 //------------------------------------------------------------------------------------------------
 //      Arduino Uno
@@ -93,21 +98,56 @@ void NES_reset()
   digitalWrite(PIN_RESET,  LOW);  delay(10);
   digitalWrite(PIN_RESET, HIGH);  
 }
+byte outpad = 0x00;
+int aaa = 0;
+volatile byte padout;
+
+int  bufcnt = 0;
+byte buf[3] = {0};
 
 // 割り込み処理(NMI)
 void NES_INT_NMI()
 {
+
+      // RLEデコード処理
+    if ( data_count == 0 ) {
+      pad        = PADDATA[data_pos++];
+      data_count = PADDATA[data_pos++];
+
+//      buf[0] = 0x55;
+//      buf[1] = 0xaa;
+buf[1] = buf[2];
+buf[0] = buf[1];
+      buf[0] = ~pad;
+     } 
+    data_count--;
+
   frame++;
 
+  
   // パッド出力
   writeButtons(pad);
 
+  bit = 0;
+  digitalWrite(PIN_OUT, (buf[0]) & (1<<bit));
+  ++bit;
+
 }
+
+
 // 割り込み処理(ラッチ)
 void NES_INT_Latch()
 {
   latch++; 
 
+}
+int clock= 0;
+void NES_INT_CLK()
+{
+    digitalWrite(PIN_OUT, (buf[0]) & (1<<bit));
+    ++bit;
+
+  ++clock;
 }
 
 // セットアップ
@@ -121,14 +161,19 @@ void setup() {
   pinMode(PIN_SELECT, OUTPUT);
   pinMode(PIN_B,      OUTPUT);
   pinMode(PIN_A,      OUTPUT);
+
+  pinMode(PIN_OUT,    OUTPUT);
+//  pinMode(PIN_CLK,    INPUT);
+
   writeButtons(0x00);
 
   // ファミコン本体リセット
   NES_reset();
 
   // 割り込み開始
-  attachInterrupt(INT0, NES_INT_Latch, FALLING);
-  attachInterrupt(INT1, NES_INT_NMI, RISING);
+  attachInterrupt(INT1, NES_INT_NMI, RISING);   // 負論理
+  attachInterrupt(INT0, NES_INT_Latch, FALLING); // 正論理
+  attachInterrupt(INT2, NES_INT_CLK, RISING);  // 負論理
 
   time = micros();
 }
@@ -151,7 +196,7 @@ void writeButtons(byte buttons)
 
 void outputLog()
 {
-  printf("%5d:%5d:|0|%c%c%c%c%c%c%c%c| [%3d (%5d)] - %5.2fms (%5.2fms)\n"
+  printf("%5d:%5d:|0|%c%c%c%c%c%c%c%c| [%3d (%5d)] - %5.2fms (%5.2fms) %d\n"
     ,frame, latch
     ,pad & PAD_RIGHT  ? 'R':'.'
     ,pad & PAD_LEFT   ? 'L':'.'
@@ -163,6 +208,7 @@ void outputLog()
     ,pad & PAD_A      ? 'A':'.'
     ,data_pos/2-1, data_count+1
     ,time*0.001f, (time - old_time)*0.001f
+    ,clock
     );
     old_frame = frame;
 }
@@ -177,12 +223,6 @@ void loop() {
 
   if ( frame != old_frame ) {
 
-    // RLEデコード処理
-    if ( data_count == 0 ) {
-      pad        = PADDATA[data_pos++];
-      data_count = PADDATA[data_pos++];
-     } 
-    data_count--;
     
     if (data_pos == PADDATASIZE) {
       writeButtons(0);
