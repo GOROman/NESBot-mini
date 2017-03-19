@@ -98,14 +98,16 @@ void NES_reset()
 void NES_INT_NMI()
 {
   frame++;
+
+  // パッド出力
+  writeButtons(pad);
+
 }
 // 割り込み処理(ラッチ)
 void NES_INT_Latch()
 {
   latch++; 
 
-  // パッド出力
-  writeButtons(pad);
 }
 
 // セットアップ
@@ -163,17 +165,17 @@ void outputLog()
     ,time*0.001f, (time - old_time)*0.001f
     );
     old_frame = frame;
-    old_time  = time;
 }
 
 // メインループ
 void loop() {
   if ( latch != old_latch ) {
+    old_time  = time;
+    time = micros();
     old_latch = latch;
   }
 
   if ( frame != old_frame ) {
-    time = micros();
 
     // RLEデコード処理
     if ( data_count == 0 ) {
