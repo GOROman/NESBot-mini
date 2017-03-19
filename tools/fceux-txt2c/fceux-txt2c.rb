@@ -1,6 +1,6 @@
 #!ruby
 
-FORMAT_VERSION = "0.10"
+FORMAT_VERSION = "0.20"
 
 PAD_RIGHT  = (1<<7)
 PAD_LEFT   = (1<<6)

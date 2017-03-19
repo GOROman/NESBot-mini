@@ -4,10 +4,39 @@
 // based on http://www.instructables.com/id/NESBot-Arduino-Powered-Robot-beating-Super-Mario-/
 //
 
-// FlashROM プログラム領域アクセス用
-#include <avr/pgmspace.h>
+// ターゲット
+#define USE_ESP32
+//#define USE_ARDUINO_UNO
 
+//------------------------------------------------------------------------------------------------
+// ESP32
+//------------------------------------------------------------------------------------------------
+#ifdef USE_ESP32
 // ピンアサイン 
+//      ESP32          -- CPU
+#define PIN_RESET  15  // CPUの~RESET端子(3)
+#define PIN_NMI     0  // CPU NMI
+//      ESP32          -- P1 Pad
+#define PIN_RIGHT   4  // BIT.7 4021  7
+#define PIN_LEFT   16  // BIT.6 4021  6
+#define PIN_DOWN   17  // BIT.5 4021  5
+#define PIN_UP      5  // BIT.4 4021  4
+#define PIN_START  18  // BIT.3 4021 13
+#define PIN_SELECT 19  // BIT.2 4021 14
+#define PIN_B      22  // BIT.1 4021 15
+#define PIN_A      23  // BIT.0 4021  1
+#define PIN_GND        // GND   4021  8
+#define PIN_LATCH  2   // P/S   4021  9
+#define PIN_LED   13   // LED
+
+#define INT0      PIN_LATCH
+#define INT1      PIN_NMI
+#endif
+
+//------------------------------------------------------------------------------------------------
+//      Arduino Uno
+//------------------------------------------------------------------------------------------------
+#ifdef ARDUINO_UNO
 //      Arduino Uno   -- CPU
 #define PIN_RESET 11  // CPUの~RESET端子(3)
 //      Arduino Uno   -- P1 Pad
@@ -22,6 +51,11 @@
 #define PIN_5V        // VCC   4021 16
 #define PIN_GND       // GND   4021  8
 #define PIN_LATCH  2  // P/S   4021  9
+#define PIN_LED   13  // LED
+
+#define INT0      PIN_LATCH
+#define INT1      PIN_NMI
+#endif
 
 // パッドデータ
 #define PAD_RIGHT  (1<<7)
@@ -29,98 +63,50 @@
 #define PAD_DOWN   (1<<5)
 #define PAD_UP     (1<<4)
 #define PAD_START  (1<<3)
-#define PAD_SELECT  (1<<2)
-//#define PAD_SELECT (PAD_UP|PAD_DOWN)  // SELECTはパッド上下同時押し扱い
+#define PAD_SELECT (1<<2)
 #define PAD_B      (1<<1)
 #define PAD_A      (1<<0)
 
-//#define PAD_RLEFLAG (1<<2)            // RLE有効フラグ(この次の1バイト分同じ入力が連続する)
-
-// Super Mario Bros. TASクリア パッドデータ
-const PROGMEM byte PADDATA[] = {
-//#include "HappyLee_SMB_TAS.h"
-#include "adelikat-transformers.h"
+const byte PADDATA[] = {
+#include "HappyLee_SMB_TAS.h"
+//#include "adelikat-transformers.h"
 };
-const int movie_length = sizeof(PADDATA);
 
-// パッドデータ展開用バッファ(ダブルバッファ)
-#define WORKSIZE 8
-byte buffer_data[2][WORKSIZE] = { 0 };
+const int PADDATASIZE = sizeof(PADDATA)/sizeof(PADDATA[0]);
 
-const byte data[] = {
-  #include "adelikat-transformers.h"
-};
-volatile int  buffer_index  = 0;          // ダブルバッファインデクス
-volatile int  buffer_offset = 0;          // FlashROMオフセット位置
-volatile bool buffer_read_request = true; // FlashROMからのロードリクエスト
+int  frame = 0;
+int  latch = 0;
+int  old_latch = -1;
+int  old_frame = -1;
 
-volatile int  pos   = 0;
-volatile int  frame = 0;
-volatile int  count = 0;
-volatile byte pad   = 0x00;
-volatile int reset_request = 0;
+int  data_pos   = 0;
+int  data_count = 0;
+byte pad        = 0x00;
+
+int time = 0;
+int old_time = 0;
+
 // ファミコン本体リセット
 void NES_reset()
 {
-  writeButtons(0x00);
-//  digitalWrite(PIN_RESET, HIGH);
-//  delay(10);
-  digitalWrite(PIN_RESET, LOW); // リセットボタン押下
-  delay(10);
-  digitalWrite(PIN_RESET, HIGH);
-
-  reset_request = 0;
-  
+  digitalWrite(PIN_RESET, HIGH);  delay(10);
+  digitalWrite(PIN_RESET,  LOW);  delay(10);
+  digitalWrite(PIN_RESET, HIGH);  
 }
 
-// パッドデータ読み出し
-byte NES_read_buffer2()
+// 割り込み処理(NMI)
+void NES_INT_NMI()
 {
-  byte data = buffer_data[buffer_index][pos++];
-  pos++;
-  if ( pos >= WORKSIZE ) {
-    pos = 0;
-    buffer_index ^= 1;
-    buffer_read_request = true;
-  }
-  return data;
+  frame++;
 }
-
-byte NES_read_buffer() {
-  return data[pos++];
-}  
-
 // 割り込み処理(ラッチ)
-void NES_latch_pulse()
+void NES_INT_Latch()
 {
-  if ( reset_request > 0 ) {
-    switch ( reset_request ) {
-//    case 5:    digitalWrite(PIN_RESET, LOW);
-    break;
-//    case 1:    digitalWrite(PIN_RESET, HIGH);
-    break;
-    }
-    reset_request--;
-    return;
-  }
-  // RLEデコード処理
-  if ( count == 0 ) {
-    pad   = data[pos++];//NES_read_buffer();
-    count = data[pos++];//NES_read_buffer();
-  }
+  latch++; 
 
   // パッド出力
   writeButtons(pad);
-
-  count--;
-//  frame++;
-
-//  if ((buffer_offset + pos) >= movie_length) {
-//    writeButtons(0);
-//    detachInterrupt(0);
-//  }  
 }
-
 
 // セットアップ
 void setup() {
@@ -133,22 +119,16 @@ void setup() {
   pinMode(PIN_SELECT, OUTPUT);
   pinMode(PIN_B,      OUTPUT);
   pinMode(PIN_A,      OUTPUT);
-
-  // FlashROM領域からSRAMへプリロードしておく
-  buffer_offset = readFromFlash( buffer_data[0], buffer_offset, WORKSIZE );
+  writeButtons(0x00);
 
   // ファミコン本体リセット
   NES_reset();
 
   // 割り込み開始
-  attachInterrupt(0, NES_latch_pulse, FALLING);
-//  attachInterrupt(0, NES_latch_pulse, RISING);
-/*
- * LOW ピンがLOWのとき発生 
-CHANGE ピンの状態が変化したときに発生 
-RISING ピンの状態がLOWからHIGHに変わったときに発生 
-FALLING ピンの状態がHIGHからLOWに変わったときに発生 
- */
+  attachInterrupt(INT0, NES_INT_Latch, FALLING);
+  attachInterrupt(INT1, NES_INT_NMI, RISING);
+
+  time = micros();
 }
 
 // ボタン状態出力
@@ -156,30 +136,61 @@ void writeButtons(byte buttons)
 {
   buttons = ~buttons; // 負論理へ
 
-  digitalWrite(PIN_UP,     buttons & PAD_UP    );
-  digitalWrite(PIN_DOWN,   buttons & PAD_DOWN  );
+  digitalWrite(PIN_A,      buttons & PAD_A     );
+  digitalWrite(PIN_B,      buttons & PAD_B     );
   digitalWrite(PIN_LEFT,   buttons & PAD_LEFT  );
   digitalWrite(PIN_RIGHT,  buttons & PAD_RIGHT );
-  digitalWrite(PIN_B,      buttons & PAD_B     );
-  digitalWrite(PIN_A,      buttons & PAD_A     );
+
   digitalWrite(PIN_SELECT, buttons & PAD_SELECT);
   digitalWrite(PIN_START,  buttons & PAD_START );
+  digitalWrite(PIN_UP,     buttons & PAD_UP    );
+  digitalWrite(PIN_DOWN,   buttons & PAD_DOWN  );
 }
 
-// フラッシュメモリから読み込み
-int readFromFlash( byte* work, int offset, int size )
+void outputLog()
 {
-  for ( int i=0; i<size; ++i ) {
-    work[i] = pgm_read_byte_near( PADDATA + offset + i );
-  }
-  return offset + size;
+  printf("%5d:%5d:|0|%c%c%c%c%c%c%c%c| [%3d (%5d)] - %5.2fms (%5.2fms)\n"
+    ,frame, latch
+    ,pad & PAD_RIGHT  ? 'R':'.'
+    ,pad & PAD_LEFT   ? 'L':'.'
+    ,pad & PAD_DOWN   ? 'D':'.'
+    ,pad & PAD_UP     ? 'U':'.'
+    ,pad & PAD_START  ? 'T':'.'
+    ,pad & PAD_SELECT ? 'S':'.'
+    ,pad & PAD_B      ? 'B':'.'
+    ,pad & PAD_A      ? 'A':'.'
+    ,data_pos/2-1, data_count+1
+    ,time*0.001f, (time - old_time)*0.001f
+    );
+    old_frame = frame;
+    old_time  = time;
 }
+
 // メインループ
 void loop() {
-  // FlashROMからSRAMへの読み出しリクエストがあった場合はロードする
-  if ( buffer_read_request ) {
-    buffer_offset = readFromFlash( buffer_data[buffer_index^1], buffer_offset, WORKSIZE );
-    buffer_read_request = false;
+  if ( latch != old_latch ) {
+    old_latch = latch;
   }
+
+  if ( frame != old_frame ) {
+    time = micros();
+
+    // RLEデコード処理
+    if ( data_count == 0 ) {
+      pad        = PADDATA[data_pos++];
+      data_count = PADDATA[data_pos++];
+     } 
+    data_count--;
+    
+    if (data_pos == PADDATASIZE) {
+      writeButtons(0);
+      detachInterrupt(INT0);
+      detachInterrupt(INT1);
+    }  
+
+    outputLog();
+  }
+
+//  delayMicroseconds(100);
 }
 
